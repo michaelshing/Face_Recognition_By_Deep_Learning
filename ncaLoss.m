@@ -1,0 +1,128 @@
+% NCALOSS
+% Copyright (C) 2013 Michael Shing 
+%
+% This program is free software; you can redistribute it and/or
+% modify it under the terms of the GNU General Public License
+% as published by the Free Software Foundation; either version 2
+% of the License, or (at your option) any later version.
+%
+% This program is distributed in the hope that it will be useful,
+% but WITHOUT ANY WARRANTY; without even the implied warranty of
+% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+% GNU General Public License for more details.
+%
+% You should have received a copy of the GNU General Public License
+% along with this program; if not, write to the Free Software
+% Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+function [loss,grad]  = ncaLoss(theta, layers, layerstype, weight_decay, data , label)
+
+layersize=length(layers)-1;
+stack=cell(layersize,1);
+pos=0;
+for ii=1:layersize
+    stack{ii}=struct;
+    wlen =  layers(ii+1)* layers(ii);
+    stack{ii}.w = reshape( theta(pos+1:pos + wlen), layers(ii+1), layers(ii));
+    pos=pos + wlen;
+    blen = layers(ii+1);
+    stack{ii}.b =  theta(pos+1:pos+layers(ii+1));
+    pos=pos + blen;
+end
+
+stackgrad = cell(size(stack));
+
+depth = numel(stack);
+z = cell(depth+1,1);
+a = cell(depth+1, 1);
+a{1} = data;
+
+for layer = (1:depth)
+    %fprintf(' w = %d\n b = %d\n x = %d,y = %d\n', size(stack{layer}.w,2), size(stack{layer}.b,1), size(a{layer},1),size(a{layer},2));
+  z{layer+1} = stack{layer}.w * a{layer} + repmat(stack{layer}.b, [1, size(a{layer},2)]);
+  if layerstype(layer+1)
+    a{layer+1} = sigmoid(z{layer+1});
+  else
+    a{layer+1} = z{layer+1};
+  end
+end
+
+probs = a{depth+1};
+
+codelen = size(probs,1);
+numdata = size(probs,2);
+
+neighbors = zeros(numdata,numdata,'uint8');
+
+for xx=1:numdata
+    for yy= 1:numdata
+        if (label(xx)==label(yy)) && (xx ~=yy)
+            neighbors(xx,yy)=1;
+        end
+    end
+end
+
+dt = zeros(codelen,numdata,numdata);
+SIGMA=1;  
+%%%% compute distances btw. all pairs of probs
+  for b=1:numdata
+    dt(:,:,b) = (probs(:,b) * ones(1,numdata)) - probs;
+  end
+  dt = (reshape(reshape(dt,[codelen numdata^2])',[numdata numdata codelen]));
+  % n is Gaussian distance
+  n = exp(-sum(dt.^2,3)/SIGMA); n=n-eye(numdata);
+  % p is NORMALIZED Gaussian distance
+  p = n ./ ( sum(n,2) * ones(1,numdata) );
+  
+  % pl is norm. Gaussian distance for +ve neighbors
+  pl = p .* logical(neighbors);
+  loss = (1/numdata)*(-sum(sum(pl,2),1));
+  clear n;
+  %%%% make up terms for gradient expressions
+  
+ if nargout>1
+     
+      nmat = repmat(logical(neighbors),[1 1 codelen]); clear neighbors;
+      dtmp =  repmat(p,[1 1 codelen]) .* dt;           clear dt;
+      dl = dtmp .* nmat;                               clear p nmat ;
+
+      %%% Compute each of the 4 terms in the gradient
+      p1 =  squeeze( sum(dl,2) )';
+      p2 =  (ones(codelen,1) * sum( pl,2 )') .* squeeze( sum(dtmp,2)  )';
+      p3 = squeeze( sum(dl,1) )';
+      p4 = squeeze(sum(dtmp .* repmat(sum(pl,2),[1 numdata   codelen]),1))';
+
+      % Compute the gradient
+      
+      d{depth+1} = -2*((p1-p2)-(p3-p4));
+      if layerstype(depth+1)
+        d{depth+1}= d{depth+1}.* a{depth+1} .* (1-a{depth+1});
+      end
+        
+
+      for layer = (depth:-1:2)
+        d{layer} = (stack{layer}.w' * d{layer+1});
+        if layerstype(layer)
+          d{layer} =d{layer}.* a{layer} .* (1-a{layer});
+        end
+      end
+
+      for layer = (depth:-1:1)
+        stackgrad{layer}.w = (1/numdata) * d{layer+1} * a{layer}'+ weight_decay * stack{layer}.w;
+        stackgrad{layer}.b = (1/numdata) * sum(d{layer+1}, 2);
+      end
+    
+      grad=[];
+      for layer = (1:depth)
+        grad = [grad; stackgrad{layer}.w(:); stackgrad{layer}.b(:)];
+      end
+   
+ end
+
+
+
+
+
+
+
+

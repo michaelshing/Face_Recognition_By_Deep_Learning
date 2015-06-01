@@ -1,0 +1,72 @@
+% default_dae - 
+% Copyright (C) 2011 KyungHyun Cho, Tapani Raiko, Alexander Ilin
+%
+% This program is free software; you can redistribute it and/or
+% modify it under the terms of the GNU General Public License
+% as published by the Free Software Foundation; either version 2
+% of the License, or (at your option) any later version.
+%
+% This program is distributed in the hope that it will be useful,
+% but WITHOUT ANY WARRANTY; without even the implied warranty of
+% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+% GNU General Public License for more details.
+%
+% You should have received a copy of the GNU General Public License
+% along with this program; if not, write to the Free Software
+% Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+%
+function [D] = default_dae (n_visible, n_hidden)
+
+    % learning parameters
+    D.learning.weight_decay =  3e-3;
+    D.learning.weight_scale = sqrt(6)/sqrt(n_visible + n_hidden+1); % also added by michael in case of h+v=0 ...
+    D.learning.minibatch_sz = 30;
+
+    % sparsity
+    D.sparsity.target = 0;
+    D.sparsity.cost = 0;
+
+    % Gaussian-Bernoulli RBM
+    D.do_normalize = 0;
+    D.do_normalize_std = 0;
+
+    % denoising
+    D.noise.drop = 0.1;
+    D.noise.level = 0.1;
+
+    % structure
+    D.structure.n_visible = n_visible;
+    D.structure.n_hidden = n_hidden;
+
+    % initializations
+    D.W1_init = 2 * D.learning.weight_scale * (rand(n_hidden, n_visible) - 0.5);
+    D.W2_init = 2 * D.learning.weight_scale * (rand(n_visible, n_hidden) - 0.5);
+    D.hbias_init = zeros(n_hidden, 1);
+    D.vbias_init = zeros(n_visible, 1);
+    D.W1 = D.W1_init;
+    D.W2 = D.W2_init;
+    D.hbias = D.hbias_init;
+    D.vbias = D.vbias_init;  
+    
+    %optimize option (L-BFGS, SGD,  CG and so on)
+    D.optimize.Method = 'lbfgs';
+    D.optimize.maxIter = 1;
+    D.optimize.corr=8;
+    
+    % batch loop times for minibatch
+    D.batchloop_times = 1; %should be large than or eauql to 1
+    
+    % final objective for early-stop , you know this precedure is good for
+    % reducing the optimize time and over-fitting
+    D.early_stop=1;
+    D.finalObjective = 1e+0 ; % ONLY takes effect when early_stop is allowed by me
+    
+    %display    
+    D.display = 1;
+    
+    %skip
+    D.skip = 0;
+    
+end
+    
+    

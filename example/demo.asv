@@ -1,0 +1,289 @@
+% add the path of sDAE code
+warning off;
+
+addpath('../');
+addpath('../minFunc/')
+
+
+%--------------------------------------------------------------------------
+% load and fix train and test data
+% tip A: the row(size(X,1) should be the number of data.
+%     B: the X_valid is test data.
+%--------------------------------------------------------------------------
+
+% load CMU-PIE
+
+X=[];
+
+% filename = 'saves/LFW.mat';
+% if  ~exist(filename,'file')
+%     X = loadImages('D:/LBP/pie/04004','*.jpg');
+%     save(filename,'X');
+% else
+%     load(filename);
+%end
+
+if  ~exist('saves/X.mat','file')
+    X = X/255;
+    X=X';
+    save('saves/X.mat','X');
+else
+    load('saves/X.mat');
+end
+X = X(1:10,:);
+numdata = size(X,1);
+datadim = size(X,2);
+
+fprintf('Total trainning data: %d\n',numdata);
+% X_labels=[];
+% 
+% load('PIE/PIE_32x32.mat');
+% X=[X; fea];
+%X_labels=[X_labels; gnd];
+% load('PIE/Pose05_64x64.mat');
+% X=[X; fea];
+% X_labels=[X_labels; gnd];
+% load('PIE/Pose07_64x64.mat');
+% X=[X; fea];
+% X_labels=[X_labels; gnd];
+% load('PIE/Pose09_64x64.mat');
+% X=[X; fea];
+% X_labels=[X_labels; gnd];
+% load('PIE/Pose27_64x64.mat');
+% X=[X; fea];
+% X_labels=[X_labels; gnd];
+% load('PIE/Pose29_64x64.mat');
+% X=[X; fea];
+% X_labels=[X_labels; gnd];
+% X=X/255;
+% clear fea gnd;
+% % load MNIST
+% %load 'mnist_14x14.mat';
+% 
+% %shuffle the training data
+% perm_idx = randperm (size(X,1));
+% datadim = size(X, 2);
+% 
+% n_all = size(X, 1);
+% n_train = ceil(n_all * 3 / 4);
+% n_valid = floor(n_all /4);
+% 
+% X_valid = X(perm_idx(n_train+1:end), :);
+% X_valid_labels = X_labels(perm_idx(n_train+1:end));
+% X = X(perm_idx(1:n_train), :);
+% X_labels = X_labels(perm_idx(1:n_train));
+% 
+% numClasses=length(unique(X_labels));
+% X_labels(X_labels == 0) = numClasses;
+% X_valid_labels(X_valid_labels == 0) = numClasses;
+
+layers = [datadim, 256, 128, 64];
+n_layers = length(layers);
+blayers = [1, 1, 1, 1, 0];
+%--------------------------------------------------------------------------
+% some optimize options 
+%--------------------------------------------------------------------------
+
+% options.Method = 'lbfgs';
+% options.maxIter = 2;
+% options.display = 'on';
+% options.CORR=10;            % this one is made for limited memory
+% lambda = 3e-3;              % we take it as weight penaty
+
+
+do_pretrain = 1;            % should always be 1
+mid_finetune = 1;           % just for self_taught 
+
+
+%--------------------------------------------------------------------------
+% do pretrain
+%--------------------------------------------------------------------------
+if do_pretrain
+    Ds = cell(n_layers - 1, 1);
+    H = X;
+    %save('saves/X.mat','X');
+    %clear X;
+    for l = 1:n_layers-1
+        % construct DAE and use default configurations
+        D = default_dae (layers(l), layers(l+1));
+
+        D.learning.weight_decay = 3e-3;
+        D.learning.minibatch_sz = 5;
+
+        D.noise.drop = 0; % 0.2
+        D.noise.level = 0;
+
+        % train DAE
+        if ~D.skip
+            fprintf(1, 'Training DAE (%d)\n', l);
+            tic;
+            D = dae (D, H ,blayers(l),blayers(l+1));
+            fprintf(1, 'Training is done after %f seconds\n', toc);
+            savename = fullfile('saves/',['Pre_layer_', num2str(l),'.mat']);
+            W1=D.W1; W2=D.W2; hbias=D.hbias; vbias=D.vbias;
+            save(savename, 'W1','W2','hbias','vbias');
+            clear W1 W2 hbias vbias;
+        else
+            loadname = fullfile('saves/',['Pre_layer_', num2str(l),'.mat']);
+            load(loadname);
+            D.W1=W1; D.W2=W2; D.hbias=hbias; D.vbias=vbias;
+            clear W1 W2 hbias vbias;
+        end
+        
+        if D.display
+            visualize_weight(D.W1', l, 'DAE');
+        end
+        
+        H = dae_get_hidden(H, D);
+
+        Ds{l} = D;
+    end
+    
+    clear H;
+end
+
+S = default_sdae(layers);
+
+S.learning.weight_decay = 3e-3;
+S.learning.minibatch_sz = 5;
+
+S.noise.drop = 0;    %0.2
+S.noise.level = 0;
+
+if do_pretrain
+    for l = 1:n_layers-1
+        S.hbiases{l} = Ds{l}.hbias;
+        S.W1{l} = Ds{l}.W1;
+    end
+    
+    for l = 1:n_layers-1
+        S.vbiases{l} = Ds{l}.vbias;
+        S.W2{l} = Ds{l}.W2;
+    end
+end
+clear Ds;
+%load('saves/X.mat');
+%-----------------------------------------------------s---------------------
+% whether do mid finetune for the whole layers(unsuperviseds)
+%--------------------------------------------------------------------------
+if mid_finetune
+    fprintf(1, 'Training sDAE\n');
+    tic;
+    S = sdae (S, X, blayers);
+    fprintf(1, 'Training is done after %f seconds\n', toc);
+    
+    for ii=1:n_layers-1
+         savename = fullfile('saves/',['midFine_layer_', num2str(ii),'.mat']);
+         W1 = S.W1{ii}; W2 = S.W2{ii}; hbias = S.hbiases{ii}; vbias = S.vbiases{ii};
+         save(savename, 'W1','W2','hbias','vbias');  
+    end
+    
+    if S.display
+       for ii=1:n_layers-1
+         visualize_weight(S.W1{ii}', ii, 'sDAE');
+       end
+    end
+
+else
+    for ii=1:n_layers-1
+         loadname = fullfile('saves/',['midFine_layer_', num2str(ii),'.mat']);
+         load(loadname, 'W1','W2','hbias','vbias');    
+         S.W1{ii} = W1; S.W2{ii} = W2;  S.hbiases{ii} = hbias; S.vbiases{ii} = vbias ;
+    end
+end
+
+H = sdae_get_hidden (X', S);
+%save 'sdae_mnist_vis.mat' H X_labels;
+V = sdae_get_visible (H, S);
+
+randIdx = randperm(numdata);
+randReal = X'(:,randIdx(1:10))
+randData = V(:,randIdx(1:10));
+
+for i=1:10
+    I = randData(:,i)*255;
+    if I>255
+        I=255;
+    end
+    if I<0
+        I=0;
+    end
+    I = reshape(I,sqrt(datadim),sqrt(datadim));
+    namestr = fullfile('saves/',['IMG_', num2str(i), '.jpg']);
+    I = uint8(I);
+    imwrite(I,namestr);
+end
+
+for i=1:10
+    I = randData(:,i)*255;
+    if I>255
+        I=255;
+    end
+    if I<0
+        I=0;
+    end
+    I = reshape(I,sqrt(datadim),sqrt(datadim));
+    recnamestr = fullfile('saves/',['IMG_', num2str(i), '.jpg']);
+    I = uint8(I);
+    imwrite(I,recnamestr);
+end
+
+
+
+%vis_mnist;
+
+
+% --------------------------------------------------------------------------
+% train the softmax classifier
+% --------------------------------------------------------------------------
+
+% softmaxModel = softmaxTrain(layers(end), numClasses, 1e-4, ...
+%                H, X_labels, options);
+% 
+% saeSoftmaxOptTheta = softmaxModel.optTheta(:);
+% 
+% stackedAETheta=saeSoftmaxOptTheta;
+% 
+% for tt=1:n_layers-1
+%     stackedAETheta = [stackedAETheta; S.W1{tt}(:); S.hbiases{tt}(:)];
+% end
+% clear S;
+% %--------------------------------------------------------------------------
+% % do final finetune to put right the softmax classifier
+% %--------------------------------------------------------------------------
+% X = X';
+% [stackedAEOptTheta] = final_finetune(stackedAETheta, layers,...    
+%                         numClasses, lambda, X, X_labels, options);
+% 
+% clear X X_labels;
+% %--------------------------------------------------------------------------
+% % predict the  labels of the test datas
+% %--------------------------------------------------------------------------
+% X_valid = X_valid';
+% 
+% [value,pred] = stackedAEPredict(stackedAETheta, numClasses, layers, X_valid);
+% 
+% acc = mean(X_valid_labels(:) == pred(:));
+% fprintf('Before Finetuning Test Accuracy: %0.3f%%\n', acc * 100);
+% 
+% [value,pred] = stackedAEPredict(stackedAEOptTheta, numClasses, layers, X_valid);
+% 
+% acc = mean(X_valid_labels(:) == pred(:));
+% fprintf('After Finetuning Test Accuracy: %0.3f%%\n', acc * 100);
+
+
+        
+
+
+
+
+
+
+
+
+
+
+
+
+
+
